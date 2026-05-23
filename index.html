@@ -730,6 +730,28 @@
         color: var(--red);
       }
 
+      /* answer-feedback banner (show-answer mode) */
+      .answer-feedback {
+        margin-top: 14px;
+        padding: 12px 16px;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .answer-feedback.correct-fb {
+        background: var(--green-bg);
+        color: var(--green);
+        border: 1.5px solid var(--green);
+      }
+      .answer-feedback.wrong-fb {
+        background: rgba(156, 31, 31, 0.08);
+        color: var(--red);
+        border: 1.5px solid var(--red);
+      }
+
       /* ---------- NAV ---------- */
       .navrow {
         display: flex;
@@ -8921,7 +8943,7 @@
         }
 
         /* ============ START QUIZ ============ */
-        function startQuiz(mode, ci, setIdx, timed, view) {
+        function startQuiz(mode, ci, setIdx, timed, view, showAnswer) {
           let picked,
             setLabel = null;
           if (mode === "chapter") {
@@ -8939,6 +8961,7 @@
             setLabel,
             timed: !!timed,
             view: view || "single", // 'single' = từng câu, 'all' = toàn bộ
+            showAnswer: !!showAnswer, // hiện đáp án ngay sau mỗi câu
             questions: picked,
             answers: new Array(picked.length).fill(null),
             flags: new Array(picked.length).fill(false),
@@ -8974,7 +8997,7 @@
           else n = Math.min(QUIZ_LEN, ALLQ.length);
 
           // lựa chọn mặc định
-          let sel = { timed: true, view: "single" };
+          let sel = { timed: true, view: "single", showAnswer: false };
 
           const overlay = document.createElement("div");
           overlay.className = "modal-overlay";
@@ -9007,6 +9030,18 @@
           </button>
         </div>
 
+        <div class="mgroup-label">Xem đáp án</div>
+        <div class="seg" data-group="showAnswer">
+          <button class="seg-btn active" data-val="0">
+            <span class="seg-t">Sau khi nộp bài</span>
+            <span class="seg-d">Xem toàn bộ đáp án trong phần ôn lại</span>
+          </button>
+          <button class="seg-btn" data-val="1">
+            <span class="seg-t">Sau mỗi câu</span>
+            <span class="seg-d">Hiện đáp án ngay khi chọn xong từng câu</span>
+          </button>
+        </div>
+
         <button class="btn btn-primary" id="startGo" style="width:100%;margin-top:22px;padding:14px">Bắt đầu</button>
         <button class="modal-cancel">Huỷ</button>
       </div>`;
@@ -9022,13 +9057,14 @@
                   .forEach((b) => b.classList.remove("active"));
                 btn.classList.add("active");
                 if (group === "timed") sel.timed = btn.dataset.val === "1";
-                else sel.view = btn.dataset.val;
+                else if (group === "view") sel.view = btn.dataset.val;
+                else if (group === "showAnswer") sel.showAnswer = btn.dataset.val === "1";
               };
             });
           });
           overlay.querySelector("#startGo").onclick = () => {
             close();
-            startQuiz(mode, ci, setIdx, sel.timed, sel.view);
+            startQuiz(mode, ci, setIdx, sel.timed, sel.view, sel.showAnswer);
           };
           overlay.querySelector(".modal-cancel").onclick = close;
           overlay.onclick = (e) => {
@@ -9291,15 +9327,38 @@
               const opts = q[3];
               const sel = S.answers[i];
               const flagged = S.flags[i];
+              const ans = q[4];
+              const revealed = S.showAnswer && sel !== null;
               const optHtml = opts
                 .map((o, idx) => {
-                  const cls = sel === idx ? "opt selected" : "opt";
-                  return `<div class="${cls}" data-q="${i}" data-idx="${idx}">
+                  let cls = "opt";
+                  let tag = "";
+                  if (revealed) {
+                    if (idx === ans) {
+                      cls += " correct";
+                      tag = `<div class="tag">✓ Đáp án đúng</div>`;
+                    } else if (idx === sel) {
+                      cls += " wrong";
+                      tag = `<div class="tag">✗ Bạn chọn</div>`;
+                    }
+                  } else {
+                    if (sel === idx) cls += " selected";
+                  }
+                  return `<div class="${cls}" data-q="${i}" data-idx="${idx}"${revealed ? ' style="pointer-events:none"' : ''}>
           <div class="key">${LETTERS[idx]}</div>
           <div class="otext">${esc(o)}</div>
+          ${tag}
         </div>`;
                 })
                 .join("");
+              let feedbackHtml = "";
+              if (revealed) {
+                if (sel === ans) {
+                  feedbackHtml = `<div class="answer-feedback correct-fb">✓ Chính xác!</div>`;
+                } else {
+                  feedbackHtml = `<div class="answer-feedback wrong-fb">✗ Sai rồi! Đáp án đúng là <strong>${LETTERS[ans]}</strong>.</div>`;
+                }
+              }
               return `
       <div class="qcard" id="qc-${i}" style="margin-bottom:16px">
         <div class="qmeta">
@@ -9311,6 +9370,7 @@
         </div>
         <div class="qtext"><span class="qn">${i + 1}.</span>${esc(q[2])}</div>
         <div class="opts">${optHtml}</div>
+        ${feedbackHtml}
       </div>`;
             })
             .join("");
@@ -9337,13 +9397,52 @@
             el.addEventListener("click", () => {
               const qi = parseInt(el.dataset.q, 10);
               const idx = parseInt(el.dataset.idx, 10);
+              // bỏ qua nếu đã chọn và đang ở chế độ xem đáp án ngay
+              if (S.showAnswer && S.answers[qi] !== null) return;
               S.answers[qi] = idx;
-              // cập nhật giao diện cục bộ
               const card = document.getElementById("qc-" + qi);
-              card
-                .querySelectorAll(".opt")
-                .forEach((o) => o.classList.remove("selected"));
-              el.classList.add("selected");
+              if (S.showAnswer) {
+                // hiện đáp án ngay: cập nhật toàn bộ card này
+                const q = S.questions[qi];
+                const ans = q[4];
+                card.querySelectorAll(".opt").forEach((o, oidx) => {
+                  o.classList.remove("selected", "correct", "wrong");
+                  o.style.pointerEvents = "none";
+                  // xoá tag cũ nếu có
+                  const oldTag = o.querySelector(".tag");
+                  if (oldTag) oldTag.remove();
+                  if (oidx === ans) {
+                    o.classList.add("correct");
+                    const tag = document.createElement("div");
+                    tag.className = "tag";
+                    tag.textContent = "✓ Đáp án đúng";
+                    o.appendChild(tag);
+                  } else if (oidx === idx && idx !== ans) {
+                    o.classList.add("wrong");
+                    const tag = document.createElement("div");
+                    tag.className = "tag";
+                    tag.textContent = "✗ Bạn chọn";
+                    o.appendChild(tag);
+                  }
+                });
+                // hiện feedback banner
+                let fb = card.querySelector(".answer-feedback");
+                if (!fb) {
+                  fb = document.createElement("div");
+                  card.appendChild(fb);
+                }
+                if (idx === ans) {
+                  fb.className = "answer-feedback correct-fb";
+                  fb.textContent = "✓ Chính xác! Bạn đã chọn đúng đáp án.";
+                } else {
+                  fb.className = "answer-feedback wrong-fb";
+                  fb.innerHTML = `✗ Sai rồi! Đáp án đúng là <strong>${LETTERS[ans]}</strong>.`;
+                }
+              } else {
+                // cập nhật giao diện cục bộ (không showAnswer)
+                card.querySelectorAll(".opt").forEach((o) => o.classList.remove("selected"));
+                el.classList.add("selected");
+              }
               document.getElementById("ansCount").textContent =
                 S.answers.filter((a) => a !== null).length;
               updateProgressBar();
@@ -9390,16 +9489,40 @@
           const opts = q[3];
           const sel = S.answers[i];
           const flagged = S.flags[i];
+          const ans = q[4]; // chỉ số đáp án đúng
+          const revealed = S.showAnswer && sel !== null;
 
           const optHtml = opts
             .map((o, idx) => {
-              const cls = sel === idx ? "opt selected" : "opt";
-              return `<div class="${cls}" data-idx="${idx}">
+              let cls = "opt";
+              let tag = "";
+              if (revealed) {
+                if (idx === ans) {
+                  cls += " correct";
+                  tag = `<div class="tag">✓ Đáp án đúng</div>`;
+                } else if (idx === sel) {
+                  cls += " wrong";
+                  tag = `<div class="tag">✗ Bạn chọn</div>`;
+                }
+              } else {
+                if (sel === idx) cls += " selected";
+              }
+              return `<div class="${cls}" data-idx="${idx}"${revealed ? ' style="pointer-events:none"' : ''}>
         <div class="key">${LETTERS[idx]}</div>
         <div class="otext">${esc(o)}</div>
+        ${tag}
       </div>`;
             })
             .join("");
+
+          let feedbackHtml = "";
+          if (revealed) {
+            if (sel === ans) {
+              feedbackHtml = `<div class="answer-feedback correct-fb">✓ Chính xác! Bạn đã chọn đúng đáp án.</div>`;
+            } else {
+              feedbackHtml = `<div class="answer-feedback wrong-fb">✗ Sai rồi! Đáp án đúng là <strong>${LETTERS[ans]}</strong>.</div>`;
+            }
+          }
 
           document.getElementById("qbody").innerHTML = `
       <div class="qcard">
@@ -9412,14 +9535,17 @@
         </div>
         <div class="qtext"><span class="qn">${i + 1}.</span>${esc(q[2])}</div>
         <div class="opts">${optHtml}</div>
+        ${feedbackHtml}
       </div>`;
 
-          document.querySelectorAll("#qbody .opt").forEach((el) => {
-            el.addEventListener("click", () => {
-              S.answers[i] = parseInt(el.dataset.idx, 10);
-              renderQuiz();
+          if (!revealed) {
+            document.querySelectorAll("#qbody .opt").forEach((el) => {
+              el.addEventListener("click", () => {
+                S.answers[i] = parseInt(el.dataset.idx, 10);
+                renderQuiz();
+              });
             });
-          });
+          }
           document.getElementById("flagBtn").onclick = () => {
             S.flags[i] = !S.flags[i];
             renderQuiz();
